@@ -9,10 +9,14 @@ import {IPoolManager} from "v4-core/src/interfaces/IPoolManager.sol";
 import {PoolKey} from "v4-core/src/types/PoolKey.sol";
 import {PoolId, PoolIdLibrary} from "v4-core/src/types/PoolId.sol";
 import {BalanceDelta} from "v4-core/src/types/BalanceDelta.sol";
-import {Currency} from "v4-core/src/types/Currency.sol";
+import {CurrencyLibrary, Currency} from "v4-core/src/types/Currency.sol";
 import {BeforeSwapDelta, BeforeSwapDeltaLibrary} from "v4-core/src/types/BeforeSwapDelta.sol";
 import {Briankerc20} from "./Briankerc20.sol";
 import {Math} from "@openzeppelin/utils/math/Math.sol";
+import "@openzeppelin/token/ERC20/IERC20.sol";
+import {TickMath} from "v4-core/src/libraries/TickMath.sol";
+import {LiquidityAmounts} from "v4-core/test/utils/LiquidityAmounts.sol";
+
 
 contract Brianker is BaseHook {
     using PoolIdLibrary for PoolKey;
@@ -23,16 +27,14 @@ contract Brianker is BaseHook {
     // ---------------------------------------------------------------
 
     mapping(PoolId => uint256 lock) public s_lockers;
-    uint24 fee = 3000;
-    int24 TICK_SPACING = 60;
-    /// @dev Min tick for full range with tick spacing of 60
-    int24 internal constant MIN_TICK = -887220;
-    /// @dev Max tick for full range with tick spacing of 60
-    int24 internal constant MAX_TICK = -MIN_TICK;
+    uint24 public constant  fee = 3000; 
+    int24 public constant   TICK_SPACING = 60;
+    int24 public constant   MIN_TICK = -91020;
 
-    int256 internal constant MAX_INT = type(int256).max;
-    uint16 internal constant MINIMUM_LIQUIDITY = 1000;
-    uint nonce;
+    int24 internal constant MAX_TICK = 887220;
+
+    uint internal nonce;
+    uint internal fixedERC20Supply = 1_000_000e18;
 
 
     constructor(IPoolManager _poolManager) BaseHook(_poolManager) {}
@@ -41,12 +43,12 @@ contract Brianker is BaseHook {
         return Hooks.Permissions({
             beforeInitialize: false,
             afterInitialize: false,
-            beforeAddLiquidity: false,
-            afterAddLiquidity: true,
+            beforeAddLiquidity: true,
+            afterAddLiquidity: false,
             beforeRemoveLiquidity: false,
             afterRemoveLiquidity: false,
             beforeSwap: true,
-            afterSwap: false,
+            afterSwap: true,
             beforeDonate: false,
             afterDonate: false,
             beforeSwapReturnDelta: false,
@@ -57,24 +59,52 @@ contract Brianker is BaseHook {
     }
 
 
-    function launchTokenWithTimeLock(string memory name, string memory symbol) public {
-        address deployedToken = deployWithCreate2(name, symbol);
+    function launchTokenWithTimeLock(string memory name, string memory symbol) public payable {
+        uint256 ethAmount = 0.00001 ether; 
+        require(msg.value == ethAmount, "Brianker Hook: not enough ether sent to initialize a pool");
         
-        // initialize a poolkey with 
+        // Deploy token and approve pool manager
+        address deployedToken = deployWithCreate2(name, symbol);
+        Briankerc20(deployedToken).approve(address(poolManager), fixedERC20Supply);
+        
         PoolKey memory poolkey = PoolKey({
-            currency0: Currency.wrap(deployedToken),
-            currency1: Currency.wrap(address(0)),
+            currency0: CurrencyLibrary.ADDRESS_ZERO,
+            currency1: Currency.wrap(deployedToken),
             fee: fee,
             tickSpacing: TICK_SPACING,
             hooks: IHooks(address(this))
         });
-        uint256 totalSupply = 1_000_000e18;
-    
-        uint256 ethAmount = 0.00001 ether; 
 
-        uint256 priceX96 = (totalSupply * (2**96)) / ethAmount;
-        uint160 sqrtPriceX96 = uint160(Math.sqrt(priceX96)); 
+        // Calculate initial sqrt price
+        uint256 ethScaled = ethAmount * (2**96);
+        uint256 priceX96 = ethScaled / fixedERC20Supply;
+        uint160 sqrtPriceX96 = uint160(Math.sqrt(priceX96));
+
+        // Initialize pool
         poolManager.initialize(poolkey, sqrtPriceX96);
+
+        // Calculate optimal liquidity amount using LiquidityAmounts
+        uint128 liquidity = LiquidityAmounts.getLiquidityForAmounts(
+            sqrtPriceX96,
+            TickMath.getSqrtPriceAtTick(MIN_TICK),
+            TickMath.getSqrtPriceAtTick(MAX_TICK),
+            ethAmount,
+            fixedERC20Supply
+        );
+
+        // Add initial liquidity
+        IPoolManager.ModifyLiquidityParams memory params = IPoolManager.ModifyLiquidityParams({
+            tickLower: MIN_TICK,
+            tickUpper: MAX_TICK,
+            liquidityDelta: int256(uint256(liquidity)), 
+            salt: bytes32(0)
+        });
+
+
+        Briankerc20(deployedToken).approve(address(poolManager), fixedERC20Supply);
+        poolManager.settle{value: ethAmount}();
+        poolManager.modifyLiquidity(poolkey, params, "");
+        poolManager.unlock("");
     }
 
 
@@ -103,9 +133,10 @@ contract Brianker is BaseHook {
                 revert(0, 0)
             }
         }
-        
         nonce++;
     }
+
+
 
     function beforeAddLiquidity(
         address sender,
@@ -118,14 +149,38 @@ contract Brianker is BaseHook {
         return BaseHook.beforeAddLiquidity.selector;
     }
 
-    function afterSwap(address, PoolKey calldata key, IPoolManager.SwapParams calldata, BalanceDelta, bytes calldata)
-        external
-        override
-        returns (bytes4, int128)
-    {
+    function afterSwap(
+        address,
+        PoolKey calldata key,
+        IPoolManager.SwapParams calldata params,
+        BalanceDelta delta,
+        bytes calldata
+    ) external override returns (bytes4, int128) {
+        int128 amount0 = delta.amount0();
+        int128 amount1 = delta.amount1();
+
+        if (amount0 > 0) {  // ETH fees
+            uint256 feeAmount0 = uint256(uint128(amount0)) * fee / 1_000_000;
+            poolManager.take(key.currency0, address(this), feeAmount0);
+        }
+
+        if (amount1 > 0) {  // Token fees
+            uint256 feeAmount1 = uint256(uint128(amount1)) * fee / 1_000_000;
+            poolManager.take(key.currency1, address(this), feeAmount1);
+        }
         
-        return (BaseHook.afterSwap.selector, );
+        return (BaseHook.afterSwap.selector, 0);
     }
 
+    function beforeSwap(
+        address,
+        PoolKey calldata key,
+        IPoolManager.SwapParams calldata params,
+        bytes calldata
+    ) external override returns (bytes4, BeforeSwapDelta, uint24) {
+        require(s_lockers[key.toId()] < block.timestamp, "Brianker: This pool isn't open for trades yet!");
+
+        return (BaseHook.beforeSwap.selector, BeforeSwapDeltaLibrary.ZERO_DELTA, 0);
+    }
 }
 
