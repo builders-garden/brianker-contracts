@@ -16,9 +16,12 @@ import {Math} from "@openzeppelin/utils/math/Math.sol";
 import "@openzeppelin/token/ERC20/IERC20.sol";
 import {TickMath} from "v4-core/src/libraries/TickMath.sol";
 import {LiquidityAmounts} from "v4-core/test/utils/LiquidityAmounts.sol";
+import {PositionManager} from "v4-periphery/src/PositionManager.sol";
+import {Actions} from "v4-periphery/src/libraries/Actions.sol";
+import {IAllowanceTransfer} from "v4-periphery/lib/permit2/src/interfaces/IAllowanceTransfer.sol";
 
-
-contract Brianker is BaseHook {
+import "forge-std/Test.sol";
+contract BriankerHook is BaseHook {
     using PoolIdLibrary for PoolKey;
 
     // NOTE: ---------------------------------------------------------
@@ -36,8 +39,15 @@ contract Brianker is BaseHook {
     uint internal nonce;
     uint internal fixedERC20Supply = 1_000_000e18;
 
+    uint160 sqrtPriceX96 = 316227766016837;
+    
+    PositionManager posm;
+    address permit2;
 
-    constructor(IPoolManager _poolManager) BaseHook(_poolManager) {}
+    constructor(IPoolManager _poolManager, PositionManager _positionManager, address _permit2) BaseHook(_poolManager) {
+        posm = _positionManager;
+        permit2 = _permit2;
+    }
 
     function getHookPermissions() public pure override returns (Hooks.Permissions memory) {
         return Hooks.Permissions({
@@ -59,13 +69,14 @@ contract Brianker is BaseHook {
     }
 
 
-    function launchTokenWithTimeLock(string memory name, string memory symbol) public payable {
-        uint256 ethAmount = 0.00001 ether; 
+    function launchTokenWithTimeLock(string memory name, string memory symbol, uint startTime) public payable {
+        uint256 ethAmount = 1e13; 
         require(msg.value == ethAmount, "Brianker Hook: not enough ether sent to initialize a pool");
         
+ 
+
         // Deploy token and approve pool manager
         address deployedToken = deployWithCreate2(name, symbol);
-        Briankerc20(deployedToken).approve(address(poolManager), fixedERC20Supply);
         
         PoolKey memory poolkey = PoolKey({
             currency0: CurrencyLibrary.ADDRESS_ZERO,
@@ -74,15 +85,10 @@ contract Brianker is BaseHook {
             tickSpacing: TICK_SPACING,
             hooks: IHooks(address(this))
         });
-
-        // Calculate initial sqrt price
-        uint256 ethScaled = ethAmount * (2**96);
-        uint256 priceX96 = ethScaled / fixedERC20Supply;
-        uint160 sqrtPriceX96 = uint160(Math.sqrt(priceX96));
-
-        // Initialize pool
-        poolManager.initialize(poolkey, sqrtPriceX96);
-
+        s_lockers[poolkey.toId()] = startTime;
+       
+       
+       
         // Calculate optimal liquidity amount using LiquidityAmounts
         uint128 liquidity = LiquidityAmounts.getLiquidityForAmounts(
             sqrtPriceX96,
@@ -92,19 +98,29 @@ contract Brianker is BaseHook {
             fixedERC20Supply
         );
 
-        // Add initial liquidity
-        IPoolManager.ModifyLiquidityParams memory params = IPoolManager.ModifyLiquidityParams({
-            tickLower: MIN_TICK,
-            tickUpper: MAX_TICK,
-            liquidityDelta: int256(uint256(liquidity)), 
-            salt: bytes32(0)
-        });
 
 
-        Briankerc20(deployedToken).approve(address(poolManager), fixedERC20Supply);
-        poolManager.settle{value: ethAmount}();
-        poolManager.modifyLiquidity(poolkey, params, "");
-        poolManager.unlock("");
+
+        bytes[] memory params = new bytes[](1);
+        
+        poolManager.initialize(poolkey, sqrtPriceX96);
+
+        bytes memory actions = abi.encodePacked(uint8(Actions.MINT_POSITION), uint8(Actions.SETTLE_PAIR));
+        bytes[] memory mintParams = new bytes[](2);
+        mintParams[0] = abi.encode(poolkey, MIN_TICK, MAX_TICK, liquidity, ethAmount, fixedERC20Supply, address(this), abi.encode(address(this)));
+        mintParams[1] = abi.encode(poolkey.currency0, poolkey.currency1);
+
+        uint256 deadline = block.timestamp + 60;
+        params[0] = abi.encodeWithSelector(
+            posm.modifyLiquidities.selector, abi.encode(actions, mintParams), deadline
+        );
+
+        Briankerc20(deployedToken).approve(address(permit2), type(uint256).max);
+
+  
+        IAllowanceTransfer(address(permit2)).approve(deployedToken, address(posm), type(uint160).max, type(uint48).max);
+        
+        posm.multicall{value: ethAmount}(params);
     }
 
 
@@ -139,12 +155,13 @@ contract Brianker is BaseHook {
 
 
     function beforeAddLiquidity(
-        address sender,
+        address sender, //   <-- bad design ? this is posm in that case passing via multicall .-. 
         PoolKey calldata key,
         IPoolManager.ModifyLiquidityParams calldata,
-        bytes calldata
+        bytes calldata hookdata
     ) external override returns (bytes4) {
-        require(sender == address(this), "Brianker Hook: not allowed to add liquidity");
+        address preMulticallSender = abi.decode(hookdata, (address));
+        require(preMulticallSender == address(this) && sender == address(posm), "Brianker Hook: not allowed to add liquidity");
 
         return BaseHook.beforeAddLiquidity.selector;
     }
