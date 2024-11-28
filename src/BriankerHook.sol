@@ -13,7 +13,7 @@ import {CurrencyLibrary, Currency} from "v4-core/src/types/Currency.sol";
 import {BeforeSwapDelta, BeforeSwapDeltaLibrary} from "v4-core/src/types/BeforeSwapDelta.sol";
 import {Briankerc20} from "./Briankerc20.sol";
 import {Math} from "@openzeppelin/utils/math/Math.sol";
-import "@openzeppelin/token/ERC20/IERC20.sol";
+import {IERC20} from "@openzeppelin/token/ERC20/IERC20.sol";
 import {TickMath} from "v4-core/src/libraries/TickMath.sol";
 import {LiquidityAmounts} from "v4-core/test/utils/LiquidityAmounts.sol";
 import {PositionManager} from "v4-periphery/src/PositionManager.sol";
@@ -32,15 +32,15 @@ contract BriankerHook is BaseHook {
     mapping(PoolId => uint256 lock) public s_lockers;
     uint24 public constant  fee = 3000; 
     int24 public constant   TICK_SPACING = 60;
-    int24 public constant   MIN_TICK = -91020;
+    int24 public constant   MIN_TICK = -887220;
 
     int24 internal constant MAX_TICK = 887220;
 
     uint internal nonce;
     uint internal fixedERC20Supply = 1_000_000e18;
 
-    uint160 sqrtPriceX96 = 316227766016837;
-    
+    uint160 sqrtPriceX96 = 792281625142643375935439503367252323;
+
     PositionManager posm;
     address permit2;
 
@@ -69,14 +69,14 @@ contract BriankerHook is BaseHook {
     }
 
 
-    function launchTokenWithTimeLock(string memory name, string memory symbol, uint startTime) public payable {
+    function launchTokenWithTimeLock(string memory name, string memory symbol, uint startTime) public payable returns(address deployedToken) {
         uint256 ethAmount = 1e13; 
         require(msg.value == ethAmount, "Brianker Hook: not enough ether sent to initialize a pool");
         
  
 
         // Deploy token and approve pool manager
-        address deployedToken = deployWithCreate2(name, symbol);
+        deployedToken = deployWithCreate2(name, symbol, fixedERC20Supply);
         
         PoolKey memory poolkey = PoolKey({
             currency0: CurrencyLibrary.ADDRESS_ZERO,
@@ -98,9 +98,6 @@ contract BriankerHook is BaseHook {
             fixedERC20Supply
         );
 
-
-
-
         bytes[] memory params = new bytes[](1);
         
         poolManager.initialize(poolkey, sqrtPriceX96);
@@ -110,7 +107,7 @@ contract BriankerHook is BaseHook {
         mintParams[0] = abi.encode(poolkey, MIN_TICK, MAX_TICK, liquidity, ethAmount, fixedERC20Supply, address(this), abi.encode(address(this)));
         mintParams[1] = abi.encode(poolkey.currency0, poolkey.currency1);
 
-        uint256 deadline = block.timestamp + 60;
+        uint256 deadline = block.timestamp;
         params[0] = abi.encodeWithSelector(
             posm.modifyLiquidities.selector, abi.encode(actions, mintParams), deadline
         );
@@ -120,18 +117,20 @@ contract BriankerHook is BaseHook {
   
         IAllowanceTransfer(address(permit2)).approve(deployedToken, address(posm), type(uint160).max, type(uint48).max);
         
+         
         posm.multicall{value: ethAmount}(params);
     }
 
 
     function deployWithCreate2(
         string memory name,
-        string memory symbol
+        string memory symbol,
+        uint totalSupply
     ) internal returns (address token) {
         // Get creation bytecode and encode constructor args
         bytes memory bytecodeWithArgs = abi.encodePacked(
             type(Briankerc20).creationCode,
-            abi.encode(name, symbol)
+            abi.encode(name, symbol, fixedERC20Supply)
         );
         
         // Use nonce directly as salt
