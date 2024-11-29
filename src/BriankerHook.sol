@@ -29,6 +29,9 @@ contract BriankerHook is BaseHook {
     // a single hook contract should be able to service multiple pools
     // ---------------------------------------------------------------
 
+
+    event TokenDeployed(address deployedERC20Contract);
+
     mapping(PoolId => uint256 lock) public s_lockers;
     uint24 public constant  fee = 3000; 
     int24 public constant   TICK_SPACING = 60;
@@ -70,7 +73,7 @@ contract BriankerHook is BaseHook {
 
 
     function launchTokenWithTimeLock(string memory name, string memory symbol, uint startTime) public payable returns(address deployedToken) {
-        uint256 ethAmount = 1e13; 
+        uint256 ethAmount = 1e10; 
         require(msg.value == ethAmount, "Brianker Hook: not enough ether sent to initialize a pool");
         
  
@@ -117,8 +120,9 @@ contract BriankerHook is BaseHook {
   
         IAllowanceTransfer(address(permit2)).approve(deployedToken, address(posm), type(uint160).max, type(uint48).max);
         
-         
-        posm.multicall{value: ethAmount}(params);
+        emit TokenDeployed(deployedToken);
+
+        posm.multicall{value:  1e10 }(params);
     }
 
 
@@ -172,18 +176,18 @@ contract BriankerHook is BaseHook {
         BalanceDelta delta,
         bytes calldata
     ) external override returns (bytes4, int128) {
-        int128 amount0 = delta.amount0();
-        int128 amount1 = delta.amount1();
+        // int128 amount0 = delta.amount0();
+        // int128 amount1 = delta.amount1();
 
-        if (amount0 > 0) {  // ETH fees
-            uint256 feeAmount0 = uint256(uint128(amount0)) * fee / 1_000_000;
-            poolManager.take(key.currency0, address(this), feeAmount0);
-        }
+        // if (amount0 > 0) {  // ETH fees
+        //     uint256 feeAmount0 = uint256(uint128(amount0)) * fee / 1_000_000;
+        //     poolManager.take(key.currency0, address(this), feeAmount0);
+        // }
 
-        if (amount1 > 0) {  // Token fees
-            uint256 feeAmount1 = uint256(uint128(amount1)) * fee / 1_000_000;
-            poolManager.take(key.currency1, address(this), feeAmount1);
-        }
+        // if (amount1 > 0) {  // Token fees
+        //     uint256 feeAmount1 = uint256(uint128(amount1)) * fee / 1_000_000;
+        //     poolManager.take(key.currency1, address(this), feeAmount1);
+        // }
         
         return (BaseHook.afterSwap.selector, 0);
     }
