@@ -19,6 +19,8 @@ import {Fixtures} from "./utils/Fixtures.sol";
 import {IERC20} from "@openzeppelin/token/ERC20/IERC20.sol";
 import {PoolSwapTest} from "v4-core/src/test/PoolSwapTest.sol";
 import {TickMath} from "v4-core/src/libraries/TickMath.sol";
+import {StateView} from "v4-periphery/src/lens/StateView.sol";
+
 
 contract BriankerHookTest is Test, Fixtures {
     using EasyPosm for IPositionManager;
@@ -81,7 +83,7 @@ contract BriankerHookTest is Test, Fixtures {
         
         
  
-            // Get current price from pool
+        // Get current price from pool
         (uint160 sqrtPriceX96,,,) = manager.getSlot0(poolId);
 
         // Calculate the raw price
@@ -100,7 +102,7 @@ contract BriankerHookTest is Test, Fixtures {
         address token1 = address(deployedToken);
         address hookAddr = address(hook);
 
-        vm.deal(address(this), 1e18);
+        vm.deal(address(this), 1e15);
         
         vm.warp(block.timestamp + 10 days);
         IERC20(token1).approve(address(swapRouter), type(uint256).max);
@@ -120,5 +122,8 @@ contract BriankerHookTest is Test, Fixtures {
         swapRouter.swap{value: 1e15}(poolkey, params, testSettings, hookData);
 
     }
+
+
+    
 
 }

@@ -17,13 +17,13 @@ library ContractConstants {
 
 
     ///////////////////////////
-    // Unichain Sepolia: 1301//
+    // Base Sepolia: 84532   //
     ///////////////////////////
 
     address constant POOL_MANAGER = 0x7Da1D65F8B249183667cdE74C5CBD46dD38AA829;
     address constant UNIVERSAL_ROUTER = 0x5418A6d871D327a1cEFE6DEB97153F07cBF6030e;
     address constant POSITION_MANAGER = 0xcDbe7b1ed817eF0005ECe6a3e576fbAE2EA5EAFE;
-    address constant STATE_VIEW = 0xdE04C804dc75E90D8a64e5589092a1D6692EFA45;
+    address constant STATE_VIEW = 0xe521e3C12D2FAAa931Ae79602278480c91C50f92;
     address constant QUOTER = 0xfe6Cf50c4cfe801dd2AEf9c1B3ce24f551944df8;
     address constant POOL_SWAP_TEST = 0x96E3495b712c6589f1D2c50635FDE68CF17AC83c;
     address constant POOL_MODIFY_LIQUIDITY_TEST = 0x96E3495b712c6589f1D2c50635FDE68CF17AC83c;

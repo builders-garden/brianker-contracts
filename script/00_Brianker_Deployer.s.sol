@@ -32,18 +32,23 @@ contract BriankerHookDeployer is Script{
             uint160(
                 Hooks.BEFORE_SWAP_FLAG | Hooks.AFTER_SWAP_FLAG | Hooks.BEFORE_ADD_LIQUIDITY_FLAG
             );
+
         // Mine a salt that will produce a hook address with the correct flags
-        bytes memory constructorArgs = abi.encode(ContractConstants.POOL_MANAGER, ContractConstants.POSITION_MANAGER, ContractConstants.PERMIT2);
+        bytes memory constructorArgs = abi.encode(
+            ContractConstants.POOL_MANAGER, 
+            ContractConstants.POSITION_MANAGER, 
+            ContractConstants.PERMIT2, 
+            ContractConstants.STATE_VIEW
+        );
+
         (address hookAddress, bytes32 salt) =
             HookMiner.find(ContractConstants.CREATE2_DEPLOYER, flags, type(BriankerHook).creationCode, constructorArgs);
 
         // Deploy the hook using CREATE2
         vm.broadcast();
-        BriankerHook briankerHook = new BriankerHook{salt: salt}(IPoolManager(ContractConstants.POOL_MANAGER), PositionManager(payable(ContractConstants.POSITION_MANAGER)), ContractConstants.PERMIT2);
+        BriankerHook briankerHook = new BriankerHook{salt: salt}(IPoolManager(ContractConstants.POOL_MANAGER), PositionManager(payable(ContractConstants.POSITION_MANAGER)), ContractConstants.PERMIT2, ContractConstants.STATE_VIEW);
         require(address(briankerHook) == hookAddress, "CounterScript: hook address mismatch");
         console.log("Contract deployed via CREATE2_DEPLOYER at: ", address(briankerHook));
-
-
 
 
         ///////////////////////////
@@ -52,8 +57,9 @@ contract BriankerHookDeployer is Script{
 
         string memory name = "Test";
         string memory symbol = "TST";
-        uint256 startTime = block.timestamp - 1 ;
+        uint256 startTime = block.timestamp - 1;
         uint256 ethAmount = 1e10;
+
 
         vm.broadcast();
         address deployedToken = briankerHook.launchTokenWithTimeLock{value: ethAmount}(name, symbol, startTime);
@@ -91,11 +97,13 @@ contract BriankerHookDeployer is Script{
 
         bytes memory hookData = new bytes(0); // no hook data on the hookless pool
         
+        string[] memory commands = new string[](2);
+
         vm.startBroadcast();
         swapRouter.swap{value: 1e15}(poolkey, params, testSettings, hookData);
-        swapRouter.swap{value: 1e15}(poolkey, params, testSettings, hookData);
-        swapRouter.swap{value: 1e15}(poolkey, params, testSettings, hookData);
         vm.stopBroadcast();
+
+        console.log("Hook contract deployed at: ", deployedToken);
     }
 }
 

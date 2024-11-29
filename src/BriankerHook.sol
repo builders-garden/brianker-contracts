@@ -19,8 +19,10 @@ import {LiquidityAmounts} from "v4-core/test/utils/LiquidityAmounts.sol";
 import {PositionManager} from "v4-periphery/src/PositionManager.sol";
 import {Actions} from "v4-periphery/src/libraries/Actions.sol";
 import {IAllowanceTransfer} from "v4-periphery/lib/permit2/src/interfaces/IAllowanceTransfer.sol";
+import {StateView} from "v4-periphery/src/lens/StateView.sol";
 
 import "forge-std/Test.sol";
+
 contract BriankerHook is BaseHook {
     using PoolIdLibrary for PoolKey;
 
@@ -31,6 +33,8 @@ contract BriankerHook is BaseHook {
 
 
     event TokenDeployed(address deployedERC20Contract);
+    event SwapExecuted(PoolKey indexed pool, address indexed user, uint price0, uint price1);
+
 
     mapping(PoolId => uint256 lock) public s_lockers;
     uint24 public constant  fee = 3000; 
@@ -45,11 +49,19 @@ contract BriankerHook is BaseHook {
     uint160 sqrtPriceX96 = 792281625142643375935439503367252323;
 
     PositionManager posm;
+    StateView stateView;
     address permit2;
-
-    constructor(IPoolManager _poolManager, PositionManager _positionManager, address _permit2) BaseHook(_poolManager) {
+    
+    constructor
+    (
+        IPoolManager _poolManager, 
+        PositionManager _positionManager, 
+        address _permit2, 
+        address _stateView
+    ) BaseHook(_poolManager) {
         posm = _positionManager;
         permit2 = _permit2;
+        stateView = StateView(_stateView);
     }
 
     function getHookPermissions() public pure override returns (Hooks.Permissions memory) {
@@ -72,13 +84,15 @@ contract BriankerHook is BaseHook {
     }
 
 
-    function launchTokenWithTimeLock(string memory name, string memory symbol, uint startTime) public payable returns(address deployedToken) {
+    function launchTokenWithTimeLock(
+        string memory name,
+        string memory symbol, 
+        uint startTime
+    ) public payable returns(address deployedToken) {
         uint256 ethAmount = 1e10; 
         require(msg.value == ethAmount, "Brianker Hook: not enough ether sent to initialize a pool");
+  
         
- 
-
-        // Deploy token and approve pool manager
         deployedToken = deployWithCreate2(name, symbol, fixedERC20Supply);
         
         PoolKey memory poolkey = PoolKey({
@@ -107,22 +121,24 @@ contract BriankerHook is BaseHook {
 
         bytes memory actions = abi.encodePacked(uint8(Actions.MINT_POSITION), uint8(Actions.SETTLE_PAIR));
         bytes[] memory mintParams = new bytes[](2);
-        mintParams[0] = abi.encode(poolkey, MIN_TICK, MAX_TICK, liquidity, ethAmount, fixedERC20Supply, address(this), abi.encode(address(this)));
-        mintParams[1] = abi.encode(poolkey.currency0, poolkey.currency1);
+        mintParams[0] = abi.encode(
+            poolkey, MIN_TICK, MAX_TICK, liquidity, ethAmount, fixedERC20Supply, address(this), abi.encode(address(this)));
+        
+        mintParams[1] = abi.encode(
+            poolkey.currency0, poolkey.currency1);
 
-        uint256 deadline = block.timestamp;
+      
         params[0] = abi.encodeWithSelector(
-            posm.modifyLiquidities.selector, abi.encode(actions, mintParams), deadline
+            posm.modifyLiquidities.selector, abi.encode(actions, mintParams), block.timestamp+60
         );
 
         Briankerc20(deployedToken).approve(address(permit2), type(uint256).max);
 
-  
         IAllowanceTransfer(address(permit2)).approve(deployedToken, address(posm), type(uint160).max, type(uint48).max);
         
         emit TokenDeployed(deployedToken);
 
-        posm.multicall{value:  1e10 }(params);
+        posm.multicall{value: ethAmount }(params);
     }
 
 
@@ -158,7 +174,7 @@ contract BriankerHook is BaseHook {
 
 
     function beforeAddLiquidity(
-        address sender, //   <-- bad design ? this is posm in that case passing via multicall .-. 
+        address sender, 
         PoolKey calldata key,
         IPoolManager.ModifyLiquidityParams calldata,
         bytes calldata hookdata
@@ -170,25 +186,34 @@ contract BriankerHook is BaseHook {
     }
 
     function afterSwap(
-        address,
+        address sender,
         PoolKey calldata key,
         IPoolManager.SwapParams calldata params,
         BalanceDelta delta,
         bytes calldata
     ) external override returns (bytes4, int128) {
+
+        // TO RE-DO 
         // int128 amount0 = delta.amount0();
         // int128 amount1 = delta.amount1();
-
+        // uint feeAmount;
         // if (amount0 > 0) {  // ETH fees
-        //     uint256 feeAmount0 = uint256(uint128(amount0)) * fee / 1_000_000;
-        //     poolManager.take(key.currency0, address(this), feeAmount0);
+        //      feeAmount = uint256(uint128(amount0)) * fee / 1_000_000;
+        //     poolManager.take(key.currency0, address(this), 1);
         // }
 
         // if (amount1 > 0) {  // Token fees
-        //     uint256 feeAmount1 = uint256(uint128(amount1)) * fee / 1_000_000;
-        //     poolManager.take(key.currency1, address(this), feeAmount1);
+        //      feeAmount = uint256(uint128(amount1)) * fee / 1_000_000;
+        //     poolManager.take(key.currency1, address(this), 1);
         // }
-        
+
+        (uint160 sqrtPriceX96,,,) = stateView.getSlot0(key.toId());
+                
+        uint price0 = (uint256(sqrtPriceX96) * uint256(sqrtPriceX96)) >> 192;
+        uint price1 = uint256((1 << 192) / (uint256(sqrtPriceX96) * uint256(sqrtPriceX96)));
+
+        emit SwapExecuted(key, sender, price0, price1);
+
         return (BaseHook.afterSwap.selector, 0);
     }
 
