@@ -2,6 +2,12 @@
 
 This repository contains the V4-Hook contracts to 
 
+## 📋 Testnet Deployments 
+
+- [Base V4 Hook Contract - Blockscout](https://base-sepolia.blockscout.com/address/0x50e8CED6ca2FA2840827b7DcC748C775277a48C0)
+
+- [Unichain V4 Hook  Contract - Uniscan ](https://sepolia.uniscan.xyz/address/0xFeF6A5F374071969aF5c7231562D61E83b44c8C0)
+
 ## 📋 Contract Description
 
 The BriankerHook acts both as a factory to deploy ERC20 and as a way to lock trades up to its official trade opening.
